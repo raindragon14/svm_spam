@@ -5,58 +5,74 @@ import os
 import re
 import string
 import nltk
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
+# It's often better to import submodules after ensuring downloads if they cause issues on import
+# from nltk.corpus import stopwords -> Will do this later
+# from nltk.stem import WordNetLemmatizer -> Will do this later
+# from nltk.tokenize import word_tokenize -> Will do this later
 
 # --- Streamlit Page Configuration (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(page_title="Spam Email Detector", layout="wide", initial_sidebar_state="expanded")
 
-# --- NLTK Resource Download (Corrected Section) ---
-# List of NLTK resources needed by the app
-nltk_resources = ['punkt', 'stopwords', 'wordnet', 'omw-1.4']
-resources_to_download_explicitly = []
-
-# Check each resource and add to download list if missing
-for resource_name in nltk_resources:
+# --- NLTK Resource Download (Revised Approach) ---
+NLTK_RESOURCES_DOWNLOADED_SUCCESSFULLY = False
+try:
+    # Try a very basic NLTK operation to see if the base data path is working
+    # This doesn't guarantee all resources, but checks if NLTK can find its data dir
+    nltk.data.find("corpora/wordnet") # A common resource
+    from nltk.corpus import stopwords # Now try importing
+    from nltk.tokenize import word_tokenize
+    from nltk.stem import WordNetLemmatizer
+    stopwords.words('english') # And try using them
+    word_tokenize("test")
+    WordNetLemmatizer().lemmatize("test")
+    NLTK_RESOURCES_DOWNLOADED_SUCCESSFULLY = True
+    st.sidebar.success("NLTK resources appear to be available.") # Subtle success message
+except LookupError:
+    st.sidebar.info("NLTK resources not found. Attempting to download...")
     try:
-        # A simple way to check for resource availability is to try a minimal operation
-        if resource_name == 'punkt':
-            nltk.word_tokenize("test")
-        elif resource_name == 'stopwords':
-            stopwords.words('english')
-        elif resource_name == 'wordnet': # omw-1.4 is a dependency for wordnet, so checking wordnet often covers both
-            WordNetLemmatizer().lemmatize("tests")
-        elif resource_name == 'omw-1.4': # Explicit check if needed, though wordnet check might suffice
-            # No direct small operation for omw-1.4 itself, usually implicitly used by WordNetLemmatizer
-            # We can assume if wordnet works, omw-1.4 (its dependency) is likely okay or will be handled by wordnet download
-            pass # Covered by wordnet check or wordnet download
-    except LookupError:
-        resources_to_download_explicitly.append(resource_name)
-    except Exception: # Catch other potential errors during the check, be safe
-        resources_to_download_explicitly.append(resource_name)
+        nltk.download('punkt', quiet=True)
+        nltk.download('stopwords', quiet=True)
+        nltk.download('wordnet', quiet=True)
+        nltk.download('omw-1.4', quiet=True) # Open Multilingual Wordnet, dependency for WordNetLemmatizer
 
-# Remove duplicates just in case
-resources_to_download_explicitly = list(set(resources_to_download_explicitly))
+        # After download, re-attempt imports and usage
+        from nltk.corpus import stopwords
+        from nltk.tokenize import word_tokenize
+        from nltk.stem import WordNetLemmatizer
+        stopwords.words('english')
+        word_tokenize("test")
+        WordNetLemmatizer().lemmatize("test")
 
-if resources_to_download_explicitly:
-    st.info(f"Attempting to download missing NLTK resources: {', '.join(resources_to_download_explicitly)}")
-    all_downloaded_successfully = True
-    for resource_to_download in resources_to_download_explicitly:
-        try:
-            nltk.download(resource_to_download, quiet=True)
-        except Exception as e:
-            st.error(f"Failed to download NLTK resource '{resource_to_download}': {e}")
-            all_downloaded_successfully = False
-    if all_downloaded_successfully:
-        st.success("NLTK resources checked/downloaded. The app should now function correctly. You might need to refresh if this was the first run.")
-    else:
-        st.error("Some NLTK resources could not be downloaded. App functionality might be limited.")
+        NLTK_RESOURCES_DOWNLOADED_SUCCESSFULLY = True
+        st.sidebar.success("NLTK resources downloaded successfully! Please refresh if it's the first run.")
+    except Exception as e:
+        st.sidebar.error(f"Failed to download or verify NLTK resources: {e}")
+        st.error("Critical NLTK resources could not be loaded. App functionality will be limited. Please check the logs.")
+except Exception as e:
+    st.sidebar.error(f"An unexpected error occurred during NLTK setup: {e}")
+    st.error("An error occurred with NLTK setup. App functionality may be limited.")
+
+
+# --- Initialize NLTK components AFTER potential download ---
+# These are now defined globally if NLTK_RESOURCES_DOWNLOADED_SUCCESSFULLY is True
+if NLTK_RESOURCES_DOWNLOADED_SUCCESSFULLY:
+    stop_words_english = set(stopwords.words('english'))
+    wordnet_lemmatizer = WordNetLemmatizer()
+else:
+    # Fallback if NLTK is critically broken, to prevent app from crashing entirely
+    st.warning("NLTK components could not be initialized. Preprocessing quality will be affected.")
+    stop_words_english = set()
+    class DummyLemmatizer:
+        def lemmatize(self, word): return word
+    wordnet_lemmatizer = DummyLemmatizer()
+    def word_tokenize(text): # Dummy tokenizer
+        return text.split()
 
 
 # --- Load Model and Vectorizer ---
 @st.cache_resource
 def load_model_and_vectorizer():
+    # ... (same as before)
     model_path = "svm_model.joblib"
     vectorizer_path = "tfidf_vectorizer.joblib"
 
@@ -76,37 +92,24 @@ def load_model_and_vectorizer():
 
 model, vectorizer = load_model_and_vectorizer()
 
-# --- Text Preprocessing Function (MUST BE THE SAME AS USED IN TRAINING) ---
-# These NLTK components should be initialized after ensuring resources are downloaded
-try:
-    stop_words_english = set(stopwords.words('english'))
-    wordnet_lemmatizer = WordNetLemmatizer()
-except LookupError as e:
-    st.error(f"NLTK resource for preprocessing (stopwords/wordnet) not available even after download attempt: {e}. Please check logs.")
-    # Fallback to empty sets/dummy lemmatizer if critical, or stop the app
-    stop_words_english = set()
-    class DummyLemmatizer:
-        def lemmatize(self, word): return word
-    wordnet_lemmatizer = DummyLemmatizer()
 
-
+# --- Text Preprocessing Function ---
 def preprocess_text(text):
     if not isinstance(text, str):
         return ""
     text = text.lower()
     text = text.translate(str.maketrans('', '', string.punctuation))
-    text = re.sub(r'\d+', ' <NUM> ', text) # Replace numbers with a placeholder
-    try:
-        tokens = word_tokenize(text)
-    except LookupError: # Fallback if punkt still fails
-        st.warning("Tokenizer (punkt) might not be fully available. Splitting by space as a fallback.")
-        tokens = text.split()
-
+    text = re.sub(r'\d+', ' <NUM> ', text)
+    
+    # Use the globally defined (or dummy) word_tokenize
+    tokens = word_tokenize(text)
+    
     tokens = [word for word in tokens if word not in stop_words_english and len(word) > 1]
     tokens = [wordnet_lemmatizer.lemmatize(word) for word in tokens]
     return " ".join(tokens)
 
 # --- Streamlit App UI ---
+# ... (same as the previous "full code" version: st.title, st.markdown, text_area, button, etc.) ...
 st.title("📧 Spam Email Detector")
 st.markdown("""
     Welcome to the Spam Email Detector!
@@ -122,7 +125,9 @@ email_text_input = st.text_area(
 )
 
 if st.button("🔎 Classify Email", type="primary"):
-    if model is None or vectorizer is None:
+    if not NLTK_RESOURCES_DOWNLOADED_SUCCESSFULLY:
+        st.error("NLTK resources are not available. Cannot preprocess text. Please check the sidebar messages and logs.")
+    elif model is None or vectorizer is None:
         st.warning("The model or vectorizer could not be loaded. Please check the application setup and logs.")
     elif not email_text_input.strip():
         st.warning("⚠️ Please enter some email text to classify.")
@@ -130,10 +135,9 @@ if st.button("🔎 Classify Email", type="primary"):
         with st.spinner("🔍 Analyzing email..."):
             cleaned_text = preprocess_text(email_text_input)
 
-            if not cleaned_text.strip() and email_text_input.strip(): # If input had content but cleaning removed it all
-                 st.info("The input text resulted in no meaningful content after preprocessing (e.g., only stopwords, punctuation, or numbers).")
-                 # Optionally, you could classify the empty string or skip classification
-                 # For now, let's try to classify anyway, vectorizer might handle empty string
+            if not cleaned_text.strip() and email_text_input.strip():
+                 st.info("The input text resulted in no meaningful content after preprocessing.")
+
             try:
                 vectorized_text = vectorizer.transform([cleaned_text])
             except Exception as e:
@@ -184,9 +188,8 @@ st.sidebar.markdown("""
 - The cleaned text is converted into numerical features using a pre-trained TF-IDF vectorizer.
 - A pre-trained SVM model predicts whether the email is Spam or Ham.
 """)
-# To add your GitHub link:
-# GITHUB_REPO_URL = "https://github.com/YOUR_USERNAME/YOUR_REPOSITORY" # Replace with your actual link
+# GITHUB_REPO_URL = "https://github.com/YOUR_USERNAME/YOUR_REPOSITORY"
 # st.sidebar.markdown(f"[View Source Code on GitHub]({GITHUB_REPO_URL})")
 
 st.markdown("---")
-st.caption("Built with Streamlit by [Your Name/Handle Here]") # Replace with your name/handle
+st.caption("Built with Streamlit by [Your Name/Handle Here]")
