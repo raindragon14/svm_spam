@@ -1,9 +1,8 @@
-# app.py
 import streamlit as st
 import joblib
 import os
 import re
-import string # Standard library, no NLTK needed
+import string
 
 # --- Streamlit Page Configuration ---
 st.set_page_config(page_title="Spam Email Detector (No NLTK)", layout="wide", initial_sidebar_state="expanded")
